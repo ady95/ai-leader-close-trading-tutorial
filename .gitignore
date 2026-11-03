@@ -1,0 +1,13 @@
+# 비밀정보
+.env
+.env.*
+!.env.example
+*.token.json
+# 수집 데이터 (용량이 크고 키움 이용약관상 재배포 대상이 아님)
+data/lake/
+logs/
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/

@@ -1,0 +1,6 @@
+requests>=2.31
+websockets>=12
+python-dotenv>=1.0
+pandas>=2.2
+pyarrow>=15
+pytest>=8
