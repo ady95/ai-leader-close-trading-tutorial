@@ -33,3 +33,18 @@ def test_afterhours_close_is_replaced_by_1530(monkeypatch):
     out = ds._fix_afterhours_close(df)
     assert out["close"].tolist()[:2] == [5.0, 11.0] and pd.isna(out["close"].iloc[2])
     assert out["close_source"].tolist() == ["daily", "minute_1530", "unavailable"]
+
+
+def test_exit_simulator_conservative_order():
+    import numpy as np
+
+    from strategies.exit_policies.intraday_exits import simulate
+    hm = np.array(["0900", "0901", "0902", "1059"])
+    o = np.array([100.0, 101.0, 99.0, 99.0])
+    h = np.array([101.0, 104.0, 99.5, 99.5])   # 09:01 봉에서 +3% 익절선(103) 도달
+    l = np.array([99.5, 97.0, 98.5, 98.5])     # 같은 봉에서 -2% 손절선(98)도 도달 → 손절 먼저
+    c = np.array([100.5, 99.0, 99.0, 99.0])
+    v = np.ones(4)
+    r = simulate(100.0, 2.0, hm, o, h, l, c, v)
+    assert r["S1"] == 100.0
+    assert r["S2"] == 98.0 - 0.5          # 손절가 98에서 반 호가(1원 호가의 절반) 불리
