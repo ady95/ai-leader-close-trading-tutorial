@@ -9,6 +9,7 @@
   python -m scripts.backfill all                  # 위 5단계를 순서대로
   python -m scripts.backfill dart --start 20230101 --end 20251231   # 과거 공시 목록 (별도)
   python -m scripts.backfill investor             # 후보 종목 일별 투자자 순매수 (별도)
+  python -m scripts.backfill nxt --top 50 --start 20260901   # NXT 1분봉 (별도)
 
 분봉은 키움이 최근 1년치만 제공하므로 가장 먼저, 그리고 매일 실행해야 한다.
 장중(08:00~20:00)에는 실시간 수집기와 호출 한도를 나누도록 호출 간격을 늘린다.
@@ -179,6 +180,27 @@ def cmd_investor(api: KiwoomREST, args) -> None:
             log.info("수급 %d/%d %s %d행", i, len(cand), s, n)
 
 
+def cmd_nxt(api: KiwoomREST, args) -> None:
+    """NXT 1분봉 (종목코드 + _NX). 분봉 후보 중 거래대금 상위 top_days 순 상위 --top 종목, --start 이후분."""
+    cand = read_parquet(path("universe", "minute_candidates.parquet")).head(args.top)
+    since = args.start + "000000"
+    for i, s in enumerate(cand["symbol"], 1):
+        adaptive_interval(api)
+        p = path("minute_nx", f"{s}.parquet")
+        old = read_parquet(p)
+        start = since if old.empty else str(old["ts"].max())
+        try:
+            df = market.minute_bars(api, f"{s}_NX", since=start)
+        except KiwoomError as e:
+            log.warning("%s NXT 분봉 실패: %s", s, e)
+            continue
+        if not df.empty:
+            df = df[df["ts"] >= since]
+            df["symbol"] = s
+        n = upsert_parquet(p, df, ["ts"]) if not df.empty else len(old)
+        log.info("NXT 분봉 %d/%d %s %d행", i, len(cand), s, n)
+
+
 def cmd_minute(api: KiwoomREST, args) -> None:
     cand = read_parquet(path("universe", "minute_candidates.parquet"))
     if cand.empty:
@@ -205,7 +227,7 @@ def cmd_minute(api: KiwoomREST, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["universe", "sectors", "daily", "candidates", "minute", "dart", "investor", "all"])
+    ap.add_argument("cmd", choices=["universe", "sectors", "daily", "candidates", "minute", "dart", "investor", "nxt", "all"])
     ap.add_argument("--start", default="20230101")
     ap.add_argument("--top", type=int, default=100)
     ap.add_argument("--days", type=int, default=260)
@@ -218,14 +240,14 @@ def main() -> None:
                         handlers=[logging.StreamHandler(sys.stdout),
                                   logging.FileHandler(path("logs", "backfill.log"), encoding="utf-8")])
     # DART 는 키움을 쓰지 않고, investor 는 다른 파일만 쓰므로 진행 중인 백필과 함께 돌려도 된다.
-    if args.cmd not in ("dart", "investor") and backfill_running():
+    if args.cmd not in ("dart", "investor", "nxt") and backfill_running():
         log.warning("다른 백필이 진행 중입니다 (%s). 종료합니다.", LOCK)
         return
     api = None if args.cmd == "dart" else KiwoomREST("real")
     steps = ["universe", "sectors", "daily", "candidates", "minute"] if args.cmd == "all" else [args.cmd]
     for step in steps:
         log.info("=== %s 시작", step)
-        if step in ("dart", "investor"):
+        if step in ("dart", "investor", "nxt"):
             globals()[f"cmd_{step}"](api, args)
             continue
         LOCK.touch()
