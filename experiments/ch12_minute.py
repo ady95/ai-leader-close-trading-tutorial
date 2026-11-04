@@ -18,6 +18,7 @@ import pandas as pd
 
 from backtest.costs import net_return
 from backtest.metrics import fmt_table, summarize
+from data.store import path
 from experiments.ch08_conditions import load1518
 from experiments.ch09_entry import pools
 from models.lightgbm import walkforward as W
@@ -113,6 +114,8 @@ def cmd_run() -> None:
     print(t.groupby(q, observed=True).agg(건수=("net", "size"), 실제갭하락=("gap_down2", "mean"),
                                           평균순수익=("net", "mean")).assign(
         실제갭하락=lambda d: (d["실제갭하락"] * 100).round(1), 평균순수익=lambda d: (d["평균순수익"] * 100).round(3)).to_string())
+    t.loc[:, ["symbol", "dt", "pred", "risk", "net", "r_entry"]].to_parquet(
+        path("research", "ch12_minute_preds.parquet"), index=False)
     print("\n특징 중요도 (gain %, 상위 10)")
     print((imp.mean(axis=1) / imp.mean(axis=1).sum() * 100).sort_values(ascending=False).head(10).round(1).to_string())
 

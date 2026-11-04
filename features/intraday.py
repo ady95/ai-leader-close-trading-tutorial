@@ -36,6 +36,18 @@ def _close_at(d: pd.DataFrame, hm: str) -> float:
     return float(x.iloc[-1]) if len(x) else np.nan
 
 
+def _after_hours(d: pd.DataFrame) -> dict:
+    out = {}
+    for name, a, b in (("t1", "1600", "1629"), ("t2", "1730", "1759"), ("t3", "1930", "1959")):
+        w = d[(d["hm"] >= a) & (d["hm"] <= b)]
+        out[f"p_ah_{name}"] = _tp_vwap(w) if len(w) else np.nan
+        out[f"value_ah_{name}"] = float((w["close"].astype(float) * w["volume"]).sum()) if len(w) else 0.0
+    ah = d[d["hm"] >= "1600"]
+    out["value_ah"] = float((ah["close"].astype(float) * ah["volume"]).sum()) if len(ah) else 0.0
+    out["last_ah"] = float(ah["close"].iloc[-1]) if len(ah) else np.nan
+    return out
+
+
 def _morning(d: pd.DataFrame) -> dict:
     """그날 아침 청산 후보 가격들 (다음 날로 shift 해서 쓴다)."""
     first5 = d[(d["hm"] >= "0900") & (d["hm"] <= "0904")]
@@ -46,6 +58,12 @@ def _morning(d: pd.DataFrame) -> dict:
         "m_c0904": _close_at(d, "0904"), "m_c0909": _close_at(d, "0909"),
         "m_c0929": _close_at(d, "0929"), "m_c0959": _close_at(d, "0959"),
         "m_vol5": float(first5["volume"].sum()),
+        # 09:00 봉 (S7 의 09:01 판단 시점 정보)
+        "m_c0900": _close_at(d, "0900"),
+        "m_h0900": float(d.loc[d["hm"] == "0900", "high"].max()) if (d["hm"] == "0900").any() else np.nan,
+        "m_l0900": float(d.loc[d["hm"] == "0900", "low"].min()) if (d["hm"] == "0900").any() else np.nan,
+        "m_v0900": float(d.loc[d["hm"] == "0900", "volume"].sum()),
+        "m_c0901": _close_at(d, "0901"),
     }
 
 
@@ -85,6 +103,8 @@ def _day_features(d: pd.DataFrame) -> dict:
                                 * d.loc[(d["hm"] >= "0900") & (d["hm"] <= "1530"), "volume"]).sum()),
         "value_t1": float((ent["close"].astype(float) * ent["volume"]).sum()),
         "open_0900": np.nan,  # 아래에서 다음 날 값으로 채운다
+        # KRX 장후 거래 (2026-09-14 이후에만 있음): T1 초기 16:00~16:29, T2 중반 17:30~17:59, T3 마감 전 19:30~19:59
+        **_after_hours(d),
     }
 
 
