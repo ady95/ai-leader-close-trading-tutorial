@@ -146,6 +146,48 @@ def cmd_six() -> None:
     print(horizons(by(base, n)))
 
 
+COND1 = ["재료(당일 공시)", "거래대금 2배", "전고점 95%", "짧은 윗꼬리 양봉", "기간조정 후 재상승", "외국인·기관 양매수(당일)"]
+
+
+def cmd_six1() -> None:
+    """이 책의 6대 조건(1-2, 참고자료 1). 당일 공시·당일 확정 수급은 15:18에 알 수 없는 상한값이다."""
+    from experiments.ch12_lgbm import add_flows
+    from strategies.entry_patterns import p2
+
+    def extra(d: pd.DataFrame) -> pd.DataFrame:
+        return add_flows(add_disclosures(p2.add_features(d)))
+    df = load_p1(extra=extra)
+    pool = df[p1.candidates(df) & df["nxt_tradable"] & df["r_on"].notna() & df["frgnr_invsr"].notna()
+              & df["hh252_prev"].notna()].copy()
+    c = pd.DataFrame(index=pool.index)
+    c[COND1[0]] = pool["n_disc"] > 0
+    c[COND1[1]] = pool["tv_ratio20"] >= 2
+    c[COND1[2]] = pool["near_high"] >= 0.95
+    c[COND1[3]] = (pool["close"] > pool["open"]) & (pool["upper_wick"] <= 0.25)
+    c[COND1[4]] = pool["days_since_high"].between(3, 10) & pool["reclaim"]
+    c[COND1[5]] = (pool["frgnr_invsr"] > 0) & (pool["orgn"] > 0)
+    c = c.fillna(False)
+    prev_both = (pool["frgn_prev"] > 0) & (pool["orgn_prev"] > 0)
+    print(f"모집단: 주도 후보 중 수급 데이터가 있는 {len(pool):,}건 ({pool['dt'].min()}~{pool['dt'].max()})")
+    print("조건별 충족 비율:", {k: f"{c[k].mean() * 100:.1f}%" for k in COND1})
+    n = c.sum(axis=1)
+    print("\n충족 개수별")
+    print(horizons(by(pool, n)))
+    print("\n6개 완전충족 / 5개 이상")
+    print(horizons({"6개 완전충족": pool[n == 6], "5개 이상": pool[n >= 5]}))
+    print("\n하나씩 빼기 (나머지 5개 충족)")
+    print(horizons({f"{k} 제외": pool[c[[x for x in COND1 if x != k]].all(axis=1)] for k in COND1}))
+    print("\n하나만 (그 조건 충족 여부)")
+    print(horizons({f"{k} 충족": pool[c[k]] for k in COND1} | {"후보 전체": pool}))
+    print("\n15:18에 알 수 있는 정보로 바꾸면: 당일 공시 → 전일 공시, 당일 수급 → 전일 수급")
+    c2 = c.copy()
+    c2[COND1[0]] = pool["n_disc_prev"] > 0
+    c2[COND1[5]] = prev_both.fillna(False)
+    n2 = c2.sum(axis=1)
+    print(horizons({"6개 완전충족 (전일 정보)": pool[n2 == 6], "5개 이상 (전일 정보)": pool[n2 >= 5],
+                    "외국인·기관 전일 양매수": pool[prev_both.fillna(False)]}))
+
+
 # ---------------------------------------------------------------- 15:18 1분봉
 def cmd_build1518() -> None:
     from features import intraday
@@ -203,7 +245,7 @@ def cmd_minute() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["material", "tv", "six", "build1518", "candle", "minute"])
+    ap.add_argument("cmd", choices=["material", "tv", "six", "six1", "build1518", "candle", "minute"])
     a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")

@@ -17,6 +17,7 @@ import pandas as pd
 
 from backtest.costs import net_return
 from backtest.metrics import fmt_table, summarize
+from data.store import path
 from experiments.ch09_entry import quarter
 from experiments.ch12_minute import FEATURES as F1518
 from experiments.ch12_minute import frame, monthly_folds
@@ -76,15 +77,34 @@ def cmd_run() -> None:
           ((t["S7 (09:10 보유 예측 시 보유)"] - t["S1 시가 전량"]).groupby(quarter(t["dt"])).mean() * 100).round(3).to_dict())
     print("\n특징 중요도 (gain %, 상위 8)")
     print((imp.mean(axis=1) / imp.mean(axis=1).sum() * 100).sort_values(ascending=False).head(8).round(1).to_string())
+    t.to_parquet(path("research", "ch13_s7.parquet"), index=False)
+
+
+def cmd_breakdown() -> None:
+    """13-5: P1·P2·그 밖, 소속 지수 국면별 S1·09:01·S7 비교 (run 결과 파일 사용)."""
+    from experiments.ch10_exit import daily_patterns_minute_period
+    from strategies.leader_ranker import features as Fz
+    t = pd.read_parquet(path("research", "ch13_s7.parquet"))
+    t = t.merge(daily_patterns_minute_period(), on=["symbol", "dt"], how="left")
+    t["pattern_type"] = t["pattern_type"].fillna("그 밖")
+    reg = pd.concat([Fz.market_regime("001").assign(market="KOSPI"), Fz.market_regime("101").assign(market="KOSDAQ")])
+    t = t.merge(reg.loc[:, ["dt", "market", "regime"]], on=["dt", "market"], how="left")
+    cols = ["S1 시가 전량", "09:01 전량", "S7 (09:10 보유 예측 시 보유)"]
+    for key in ("pattern_type", "regime"):
+        g = t.groupby(key)
+        out = pd.concat({c: g[c].mean() * 100 for c in cols}, axis=1).round(3)
+        out["건수"] = g.size()
+        out["S7−S1"] = (out[cols[2]] - out[cols[0]]).round(3)
+        print(f"\n{key}별 평균 (%, 비용 후)\n{out.to_string()}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["run"])
-    ap.parse_args()
+    ap.add_argument("cmd", choices=["run", "breakdown"])
+    a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    cmd_run()
+    globals()[f"cmd_{a.cmd}"]()
 
 
 if __name__ == "__main__":
