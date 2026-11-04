@@ -76,3 +76,23 @@ class DartPoller:
                 for x in new_rows:
                     f.write(json.dumps(x, ensure_ascii=False) + "\n")
         return len(new_rows)
+
+
+def history(day: str, session: requests.Session | None = None) -> list[dict]:
+    """과거 하루치 공시 목록 전체 (폴링 이전 기간용). 시각 정보는 없다 — 접수일 장 마감 후로 간주한다."""
+    s = session or requests.Session()
+    key, rows, page = dart_api_key(), [], 1
+    while True:
+        j = s.get(URL, params={"crtfc_key": key, "bgn_de": day, "end_de": day,
+                               "page_no": page, "page_count": 100}, timeout=30).json()
+        if j.get("status") == "013":
+            break
+        if j.get("status") != "000":
+            raise RuntimeError(f"DART 오류 {j.get('status')} {j.get('message')}")
+        for x in j.get("list", []):
+            x["report_nm"] = x.get("report_nm", "").strip()
+            rows.append(x)
+        if page >= int(j.get("total_page", 1)):
+            break
+        page += 1
+    return rows

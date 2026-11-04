@@ -7,6 +7,8 @@
   python -m scripts.backfill candidates --top 100 --days 260
   python -m scripts.backfill minute               # 후보 종목 1분봉 (증분)
   python -m scripts.backfill all                  # 위 5단계를 순서대로
+  python -m scripts.backfill dart --start 20230101 --end 20251231   # 과거 공시 목록 (별도)
+  python -m scripts.backfill investor             # 후보 종목 일별 투자자 순매수 (별도)
 
 분봉은 키움이 최근 1년치만 제공하므로 가장 먼저, 그리고 매일 실행해야 한다.
 장중(08:00~20:00)에는 실시간 수집기와 호출 한도를 나누도록 호출 간격을 늘린다.
@@ -129,6 +131,54 @@ def cmd_sectors(api: KiwoomREST, args) -> None:
         log.info("지수 %s %d행", cd, n)
 
 
+def cmd_dart(api: KiwoomREST, args) -> None:
+    """과거 공시 목록 (날짜별 parquet). DART 일일 호출 한도(약 2만 건) 안에서 이어받기 한다."""
+    from collectors import dart
+    end = args.end or market.today()
+    days = [d.strftime("%Y%m%d") for d in pd.date_range(args.start, end)]  # 주말 공시도 있으므로 달력일 전체
+    import requests
+    s = requests.Session()
+    for i, d in enumerate(days, 1):
+        p = path("dart_hist", f"{d}.parquet")
+        if p.exists():
+            continue
+        try:
+            rows = dart.history(d, s)
+        except Exception as e:  # noqa: BLE001
+            log.warning("DART %s 실패: %s", d, e)
+            time.sleep(5)
+            continue
+        pd.DataFrame(rows).to_parquet(p, index=False)
+        if i % 20 == 0 or i == len(days):
+            log.info("DART %d/%d %s %d건", i, len(days), d, len(rows))
+        time.sleep(0.2)
+
+
+def cmd_investor(api: KiwoomREST, args) -> None:
+    """분봉 후보 종목의 일별 투자자별 순매수 확정치 (ka10059, 2023~).
+
+    기준일은 마지막으로 완성된 거래일(일봉 파일의 최신 날짜)이다. 장중에 오늘 날짜로 조회하면
+    아직 확정되지 않은 당일 값이 섞이기 때문이다.
+    """
+    cand = read_parquet(path("universe", "minute_candidates.parquet"))["symbol"].tolist()
+    base = str(read_parquet(path("daily", "005930.parquet"))["dt"].max())
+    for i, s in enumerate(cand, 1):
+        adaptive_interval(api)
+        p = path("investor_daily", f"{s}.parquet")
+        old = read_parquet(p)
+        start = args.start if old.empty else max(str(old["dt"].max()), args.start)
+        try:
+            df = market.investor_daily(api, s, base, start=start)
+        except KiwoomError as e:
+            log.warning("%s 수급 실패: %s", s, e)
+            continue
+        if not df.empty:
+            df = df[(df["dt"] >= args.start) & (df["dt"] <= base)]
+        n = upsert_parquet(p, df, ["dt"]) if not df.empty else len(old)
+        if i % 50 == 0 or i == len(cand):
+            log.info("수급 %d/%d %s %d행", i, len(cand), s, n)
+
+
 def cmd_minute(api: KiwoomREST, args) -> None:
     cand = read_parquet(path("universe", "minute_candidates.parquet"))
     if cand.empty:
@@ -155,24 +205,29 @@ def cmd_minute(api: KiwoomREST, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["universe", "sectors", "daily", "candidates", "minute", "all"])
+    ap.add_argument("cmd", choices=["universe", "sectors", "daily", "candidates", "minute", "dart", "investor", "all"])
     ap.add_argument("--start", default="20230101")
     ap.add_argument("--top", type=int, default=100)
     ap.add_argument("--days", type=int, default=260)
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--end", default="")
     args = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s",
                         handlers=[logging.StreamHandler(sys.stdout),
                                   logging.FileHandler(path("logs", "backfill.log"), encoding="utf-8")])
-    if backfill_running():
+    # DART 는 키움을 쓰지 않고, investor 는 다른 파일만 쓰므로 진행 중인 백필과 함께 돌려도 된다.
+    if args.cmd not in ("dart", "investor") and backfill_running():
         log.warning("다른 백필이 진행 중입니다 (%s). 종료합니다.", LOCK)
         return
-    api = KiwoomREST("real")
+    api = None if args.cmd == "dart" else KiwoomREST("real")
     steps = ["universe", "sectors", "daily", "candidates", "minute"] if args.cmd == "all" else [args.cmd]
     for step in steps:
         log.info("=== %s 시작", step)
+        if step in ("dart", "investor"):
+            globals()[f"cmd_{step}"](api, args)
+            continue
         LOCK.touch()
         try:
             globals()[f"cmd_{step}"](api, args)

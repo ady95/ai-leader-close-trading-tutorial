@@ -103,11 +103,17 @@ def ticks(api: KiwoomREST, symbol: str, until_ts: str, max_pages: int = 400) -> 
 
 
 # -------------------------------------------------------------------- 수급
-def investor_daily(api: KiwoomREST, symbol: str, dt: str, pages: int = 1) -> pd.DataFrame:
-    """ka10059 종목별 투자자·기관별 일별 순매수 (금액, 백만원 단위)."""
+def investor_daily(api: KiwoomREST, symbol: str, dt: str, pages: int = 1,
+                   start: str | None = None) -> pd.DataFrame:
+    """ka10059 종목별 투자자·기관별 일별 순매수 (금액, 백만원 단위). 한 페이지 100거래일.
+
+    start(YYYYMMDD)를 주면 그 날짜보다 과거가 나올 때까지 연속조회한다 (pages 무시).
+    """
     rows: list[dict] = []
     body = {"dt": dt, "stk_cd": symbol, "amt_qty_tp": "1", "trde_tp": "0", "unit_tp": "1000"}
-    for page in api.paged("/api/dostk/stkinfo", "ka10059", body, "stk_invsr_orgn", max_pages=pages):
+    stop = (lambda r: r[-1]["dt"] < start) if start else None
+    for page in api.paged("/api/dostk/stkinfo", "ka10059", body, "stk_invsr_orgn", stop=stop,
+                          max_pages=None if start else pages):
         rows += page
     df = pd.DataFrame([normalize_row(r) for r in rows])
     if not df.empty:

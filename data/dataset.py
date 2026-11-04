@@ -23,6 +23,7 @@ DEV_START, DEV_END = "20230101", "20251231"
 HOLDOUT_START = "20260101"
 UNSEAL_ENV = "RESEARCH_UNSEAL_HOLDOUT"
 
+AFTERHOURS_START = "20260914"   # 이날부터 키움 일봉 종가 = 장후 마지막 가격(19:59), 정규장 종가 아님 (3-3)
 PRICE_LIMIT = 0.30          # 일일 가격제한폭 ±30%
 LIMIT_UP_EPS = 0.295        # 이 이상 오른 날은 상한가(근처)로 본다 — 종가 매수 체결이 불확실
 
@@ -66,6 +67,45 @@ def _raw_daily() -> pd.DataFrame:
     return df
 
 
+def regular_session_daily(symbol: str) -> pd.DataFrame:
+    """1분봉으로 만든 KRX 정규장 일봉 (09:00~15:30). close = 15:30 종가 단일가 봉의 종가."""
+    p = path("minute", f"{symbol}.parquet")
+    if not p.exists():
+        return pd.DataFrame()
+    m = pd.read_parquet(p, columns=["ts", "open", "high", "low", "close", "volume"])
+    m["dt"], m["hm"] = m["ts"].str[:8], m["ts"].str[8:12]
+    m = m[(m["hm"] >= "0900") & (m["hm"] <= "1530")].sort_values("ts")
+    g = m.groupby("dt")
+    out = pd.DataFrame({"open": g["open"].first(), "high": g["high"].max(), "low": g["low"].min(),
+                        "close": m[m["hm"] == "1530"].set_index("dt")["close"],
+                        "volume": g["volume"].sum()})
+    return out.dropna(subset=["close"]).reset_index()
+
+
+def _fix_afterhours_close(df: pd.DataFrame) -> pd.DataFrame:
+    """AFTERHOURS_START 이후 행의 OHLC를 1분봉 정규장 값으로 바꾼다. 1분봉이 없으면 close 를 비운다."""
+    late = df["dt"] >= AFTERHOURS_START
+    df["close_source"] = np.where(late, "unavailable", "daily")
+    if not late.any():
+        return df
+    fixes = []
+    for s in df.loc[late, "symbol"].unique():
+        r = regular_session_daily(s)
+        if not r.empty:
+            fixes.append(r[r["dt"] >= AFTERHOURS_START].assign(symbol=s))
+    if fixes:
+        f = pd.concat(fixes).set_index(["symbol", "dt"])
+        idx = pd.MultiIndex.from_frame(df.loc[late, ["symbol", "dt"]])
+        hit = idx.isin(f.index)
+        rows = df.index[late][hit]
+        vals = f.loc[idx[hit]]
+        for c in ("open", "high", "low", "close"):
+            df.loc[rows, c] = vals[c].to_numpy()
+        df.loc[rows, "close_source"] = "minute_1530"
+    df.loc[late & (df["close_source"] == "unavailable"), "close"] = np.nan
+    return df
+
+
 def _check_period(period: str) -> tuple[str, str]:
     if period == "dev":
         return DEV_START, DEV_END
@@ -89,6 +129,7 @@ def load_daily(period: str = "dev") -> pd.DataFrame:
     df = _raw_daily()
     df = df[(df["dt"] >= start) & (df["dt"] <= end)].copy()
     df = df.sort_values(["symbol", "dt"]).reset_index(drop=True)
+    df = _fix_afterhours_close(df)
     df["date"] = pd.to_datetime(df["dt"])
     df["value"] = df["value_mil"] * 1e6
     g = df.groupby("symbol", sort=False)

@@ -22,3 +22,14 @@ def test_trade_stats_and_mdd():
     s = trade_stats(pd.Series([0.02, -0.01, 0.03, -0.02]))
     assert s["건수"] == 4 and s["PF"] == pytest.approx(5 / 3)
     assert max_drawdown(pd.Series([0.1, -0.5, 0.2])) == pytest.approx(-0.5)
+
+
+def test_afterhours_close_is_replaced_by_1530(monkeypatch):
+    reg = pd.DataFrame({"dt": ["20261103"], "open": [10.0], "high": [12.0], "low": [9.0], "close": [11.0],
+                        "volume": [100]})
+    monkeypatch.setattr(ds, "regular_session_daily", lambda s: reg if s == "A" else pd.DataFrame())
+    df = pd.DataFrame({"symbol": ["A", "A", "B"], "dt": ["20260911", "20261103", "20261103"],
+                       "open": [1.0] * 3, "high": [1.0] * 3, "low": [1.0] * 3, "close": [5.0] * 3})
+    out = ds._fix_afterhours_close(df)
+    assert out["close"].tolist()[:2] == [5.0, 11.0] and pd.isna(out["close"].iloc[2])
+    assert out["close_source"].tolist() == ["daily", "minute_1530", "unavailable"]
