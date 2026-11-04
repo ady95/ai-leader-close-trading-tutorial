@@ -24,8 +24,11 @@ from strategies.entry_patterns import p1
 pd.set_option("display.width", 200)
 
 
-def load() -> pd.DataFrame:
+def load(extra=None) -> pd.DataFrame:
+    """특징 패널 + P1 특징. extra 는 거래정지일을 빼기 전에 적용할 추가 특징 함수."""
     df = p1.add_features(pd.read_parquet(FEAT))
+    if extra is not None:
+        df = extra(df)
     df = df[df["tradable"] & (df["ret"].abs() <= 0.305)].copy()
     ok = df["nxt_tradable"] & df["r_on"].notna()
     df.loc[~ok, ["r_on", "r_oc"]] = np.nan
