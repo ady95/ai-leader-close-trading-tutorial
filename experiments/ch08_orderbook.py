@@ -3,6 +3,7 @@
 사용법
   python -m experiments.ch08_orderbook spread --day 20261104 --start 151800 --end 151959
   python -m experiments.ch08_orderbook spread --day 20261105 --start 090000 --end 090459
+  python -m experiments.ch08_orderbook flow --day 20261104      # 15:17:59 잔량·체결강도 vs 15:18→15:30 수익
 
 0D(주식호가잔량) 필드: 21 호가시간, 41 매도1호가, 51 매수1호가, 61 매도1잔량, 71 매수1잔량,
 121 총매도잔량, 125 총매수잔량. 수집 중인 파일도 읽을 수 있다(마지막 미완성 블록은 건너뜀).
@@ -77,16 +78,70 @@ def cmd_spread(day: str, start: str, end: str) -> None:
     print(f"총매수잔량 비중 중앙값 {per['imbalance'].median() * 100:.1f}%")
 
 
+def read_trades(day: str, start: str, end: str) -> pd.DataFrame:
+    """0B(주식체결): 20 체결시간, 10 현재가, 228 체결강도."""
+    rows = []
+    for p in sorted(path("realtime", day).glob("trades*.jsonl.gz")):
+        try:
+            with gzip.open(p, "rt", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    v = r.get("values") or {}
+                    hm = str(v.get("20", ""))
+                    if not (start <= hm <= end):
+                        continue
+                    rows.append({"symbol": r["item"], "t": hm, "rt": r.get("rt", ""),
+                                 "price": _num(v.get("10")), "strength": _num(v.get("228"))})
+        except (EOFError, zlib.error, OSError):
+            pass
+    return pd.DataFrame(rows)
+
+
+def _rank_corr(a: pd.Series, b: pd.Series) -> float:
+    return float(np.corrcoef(a.rank(), b.rank())[0, 1])
+
+
+def cmd_flow(day: str) -> None:
+    """15:17:59 시점의 호가잔량·체결강도가 15:18 → 15:30 종가 단일가 수익을 설명하는가 (하루 단면)."""
+    ob = read_orderbook(day, "151500", "151759")
+    ob = ob[(ob["ask"] > 0) & (ob["bid"] > 0)]
+    last_ob = ob.sort_values("t").groupby("symbol").tail(1).set_index("symbol")
+    tr = read_trades(day, "151500", "153059").sort_values(["t", "rt"])
+    before = tr[tr["t"] <= "151759"].groupby("symbol").tail(1).set_index("symbol")
+    close = tr[tr["t"] >= "153000"].groupby("symbol").head(1).set_index("symbol")["price"]
+    f = pd.DataFrame({
+        "book_bid_share": last_ob["tot_bid"] / (last_ob["tot_bid"] + last_ob["tot_ask"]),
+        "top_bid_share": last_ob["bid_q"] / (last_ob["bid_q"] + last_ob["ask_q"]),
+        "strength": before["strength"],
+        "ret": close / before["price"] - 1,
+    }).dropna()
+    print(f"{day}: 15:17:59 호가·체결과 15:30 종가가 모두 있는 종목 {len(f)}개")
+    print(f"15:18 → 15:30 수익: 평균 {f['ret'].mean() * 100:+.3f}%, 중앙값 {f['ret'].median() * 100:+.3f}%, "
+          f"상승 {(f['ret'] > 0).mean() * 100:.1f}% · 하락 {(f['ret'] < 0).mean() * 100:.1f}%")
+    for col, name in [("book_bid_share", "총매수잔량 비중"), ("top_bid_share", "매수1호가 잔량 비중"),
+                      ("strength", "체결강도")]:
+        q = pd.qcut(f[col].rank(method="first"), 3, labels=["하", "중", "상"])
+        g = f.groupby(q, observed=True)["ret"].mean() * 100
+        print(f"{name}: 분포 중앙값 {f[col].median():.3f}, 순위상관 {_rank_corr(f[col], f['ret']):+.3f}, "
+              f"3분위 평균수익 하 {g['하']:+.3f}% · 중 {g['중']:+.3f}% · 상 {g['상']:+.3f}%")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["spread"])
+    ap.add_argument("cmd", choices=["spread", "flow"])
     ap.add_argument("--day", required=True)
     ap.add_argument("--start", default="151800")
     ap.add_argument("--end", default="151959")
     a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    cmd_spread(a.day, a.start, a.end)
+    if a.cmd == "flow":
+        cmd_flow(a.day)
+    else:
+        cmd_spread(a.day, a.start, a.end)
 
 
 if __name__ == "__main__":

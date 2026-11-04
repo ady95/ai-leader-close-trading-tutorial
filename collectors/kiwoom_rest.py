@@ -150,6 +150,8 @@ class KiwoomREST:
                 time.sleep(delay); delay *= 2
                 continue
             if r.status_code == 429 or r.status_code >= 500:
+                if attempt == retries - 1:                     # 마지막 시도면 기다리지 않고 바로 실패
+                    raise KiwoomError(f"{api_id} HTTP {r.status_code} (재시도 없음)")
                 log.warning("%s HTTP %s, %.1fs 후 재시도", api_id, r.status_code, delay)
                 time.sleep(delay); delay *= 2
                 continue

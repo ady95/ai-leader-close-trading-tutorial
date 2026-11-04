@@ -55,6 +55,17 @@ def journal_path(day: str):
     return path("trading", f"journal_{day}.jsonl")
 
 
+def submit_with_retry(om: OrderManager, it: Intent, ref: float, deadline: str) -> Intent:
+    """reconcile 로 '접수 안 됨(not_found)' 이 확인된 경우에만, 새 client_id 로 한 번 더 보낸다 (16-3)."""
+    out = om.submit(it, ref)
+    if out.status == "not_found" and datetime.now().strftime("%H%M%S") < deadline:
+        time.sleep(1.0)                                # 429 직후 바로 보내면 또 막힌다
+        retry = Intent(it.client_id + "-r1", it.symbol, it.side, it.qty, it.price)
+        out = om.submit(retry, ref)
+        log.info("%s 재제출 (새 client_id %s) → %s %s", it.symbol, retry.client_id, out.status, out.ord_no)
+    return out
+
+
 def cmd_buy() -> None:
     real, mode = KiwoomREST("real"), trading_mode()
     om = OrderManager(KiwoomREST(mode), journal_path(datetime.now().strftime("%Y%m%d")), RiskLimits())
@@ -73,7 +84,7 @@ def cmd_buy() -> None:
         if qty < 1:
             log.info("%s 1주 가격 %s 가 예산보다 큼 — 건너뜀", r.symbol, ask)
             continue
-        it = om.submit(Intent(f"{day}-{r.symbol}-T-1-buy", r.symbol, "buy", int(qty), ask), ask)
+        it = submit_with_retry(om, Intent(f"{day}-{r.symbol}-T-1-buy", r.symbol, "buy", int(qty), ask), ask, "151930")
         log.info("매수 %s %s주 @%s → %s %s %s", r.symbol, qty, ask, it.status, it.ord_no, it.msg)
     wait_until("151940")
     for o in om.open_orders():                        # 15:20 전에 미체결은 취소 (T-1 정의)
@@ -101,7 +112,7 @@ def cmd_sell() -> None:
     today = datetime.now().strftime("%Y%m%d")
     for s, p in pos.items():
         if s in bought and p["qty"] > 0:
-            it = om.submit(Intent(f"{today}-{s}-S1-sell", s, "sell", p["qty"], None), p["price"])
+            it = submit_with_retry(om, Intent(f"{today}-{s}-S1-sell", s, "sell", p["qty"], None), p["price"], "091500")
             log.info("매도 %s %s주 → %s %s", s, p["qty"], it.status, it.ord_no)
     time.sleep(3)
     log.info("09:00 매도 후 잔고 %s", om.positions())
