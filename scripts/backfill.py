@@ -2,10 +2,11 @@
 
 사용법
   python -m scripts.backfill universe            # 전 종목 목록 스냅샷
+  python -m scripts.backfill sectors             # 업종 분류 스냅샷 + 업종·종합 지수 일봉
   python -m scripts.backfill daily --start 20230101
   python -m scripts.backfill candidates --top 100 --days 260
   python -m scripts.backfill minute               # 후보 종목 1분봉 (증분)
-  python -m scripts.backfill all                  # 위 4단계를 순서대로
+  python -m scripts.backfill all                  # 위 5단계를 순서대로
 
 분봉은 키움이 최근 1년치만 제공하므로 가장 먼저, 그리고 매일 실행해야 한다.
 장중(08:00~20:00)에는 실시간 수집기와 호출 한도를 나누도록 호출 간격을 늘린다.
@@ -99,6 +100,35 @@ def cmd_candidates(api: KiwoomREST, args) -> None:
     log.info("분봉 후보 %d종목 (최근 %d거래일, 일별 거래대금 상위 %d)", len(cand), len(days), args.top)
 
 
+def cmd_sectors(api: KiwoomREST, args) -> None:
+    """업종 분류 스냅샷 + 업종·종합 지수 일봉.
+
+    종목 목록(ka10099)의 upName 은 코스닥 종목에서 비어 있으므로, 업종별 구성 종목(ka20002)
+    으로 종목→업종 매핑을 만든다. 한 종목이 '제조'와 세부 업종에 함께 속하면 세부 업종을 쓴다.
+    """
+    codes = market.sector_codes(api)
+    rows = []
+    for r in codes.itertuples():
+        adaptive_interval(api)
+        if not r.is_sector:
+            continue
+        for s in market.sector_members(api, r.market, r.inds_cd):
+            rows.append({"symbol": s, "market": r.market, "inds_cd": r.inds_cd, "inds_nm": r.inds_nm})
+    m = pd.DataFrame(rows).drop_duplicates("symbol", keep="first")
+    p = path("universe", f"sectors_{market.today()}.parquet")
+    m.to_parquet(p, index=False)
+    log.info("업종 매핑 %d종목, 업종 %d개 → %s", len(m), m["inds_cd"].nunique(), p)
+    base = market.today()
+    for cd in ["001", "101"] + sorted(m["inds_cd"].unique()):
+        adaptive_interval(api)
+        p = path("index", f"{cd}.parquet")
+        old = read_parquet(p)
+        start = args.start if old.empty else max(old["dt"].max(), args.start)
+        df = market.index_daily(api, cd, base, start)
+        n = upsert_parquet(p, df, ["dt"]) if not df.empty else len(old)
+        log.info("지수 %s %d행", cd, n)
+
+
 def cmd_minute(api: KiwoomREST, args) -> None:
     cand = read_parquet(path("universe", "minute_candidates.parquet"))
     if cand.empty:
@@ -125,7 +155,7 @@ def cmd_minute(api: KiwoomREST, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["universe", "daily", "candidates", "minute", "all"])
+    ap.add_argument("cmd", choices=["universe", "sectors", "daily", "candidates", "minute", "all"])
     ap.add_argument("--start", default="20230101")
     ap.add_argument("--top", type=int, default=100)
     ap.add_argument("--days", type=int, default=260)
@@ -140,7 +170,7 @@ def main() -> None:
         log.warning("다른 백필이 진행 중입니다 (%s). 종료합니다.", LOCK)
         return
     api = KiwoomREST("real")
-    steps = ["universe", "daily", "candidates", "minute"] if args.cmd == "all" else [args.cmd]
+    steps = ["universe", "sectors", "daily", "candidates", "minute"] if args.cmd == "all" else [args.cmd]
     for step in steps:
         log.info("=== %s 시작", step)
         LOCK.touch()

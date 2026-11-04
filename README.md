@@ -36,6 +36,7 @@ python -m scripts.collect_daemon
 | 데이터 | 수집 방법 | 저장 위치 (`data/lake/`) |
 |---|---|---|
 | 전 종목 목록 | ka10099 | `universe/` |
+| 업종 분류·지수 일봉 | ka10101·ka20002·ka20006 | `universe/sectors_*.parquet`, `index/` |
 | 일봉 | ka10081 (수정주가) | `daily/{종목}.parquet` |
 | 1분봉 | ka10080, 매일 증분 | `minute/{종목}.parquet` |
 | 틱 | ka10079, 오전·장마감 후 구간 | `ticks/YYYYMMDD/` |
@@ -48,6 +49,17 @@ python -m scripts.collect_daemon
 
 모든 레코드에 **수집 시각(`received_at`, `rt`, `first_seen`)** 을 남깁니다. 백테스트에서 "그 시각에 알 수 있었던 정보"만 쓰기 위한 기준입니다.
 수집 데이터는 용량이 크고 재배포 대상이 아니므로 저장소에 포함하지 않습니다.
+
+## 연구 실험
+
+연구 기간은 실험 전에 나누어 두었습니다. 개발 기간(2023-01~2025-12)으로 탐색하고, **2026-01 이후 홀드아웃은 봉인**되어
+`data.dataset.load_daily("holdout")` 이 예외를 냅니다(최종 검증 때만 `RESEARCH_UNSEAL_HOLDOUT=1`).
+
+```bash
+python -m scripts.backfill sectors                 # 업종 매핑 + 지수 일봉
+python -m experiments.ch05_leaders build           # 5장 특징 계산
+python -m experiments.ch05_leaders e0              # E0 기준선 (그 밖에 grid / sector / regime / ranker)
+```
 
 ## 저장소 구조
 

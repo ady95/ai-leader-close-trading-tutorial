@@ -176,5 +176,53 @@ def theme_members(api: KiwoomREST, theme_code: str) -> pd.DataFrame:
     return df
 
 
+# ------------------------------------------------------------------ 업종·지수
+# 업종 분류로 쓰지 않는 지수 (종합·규모별·스타일·파생). '제조'는 하위 업종을 묶은 상위 분류다.
+NON_SECTOR = {"001", "002", "003", "004", "027", "101", "106"}
+
+
+def sector_codes(api: KiwoomREST) -> pd.DataFrame:
+    """ka10101 업종코드 목록. market: 0=코스피, 1=코스닥. is_sector=업종 분류용 여부."""
+    frames = []
+    for mrkt in ("0", "1"):
+        j, _ = api.request("/api/dostk/stkinfo", "ka10101", {"mrkt_tp": mrkt})
+        df = pd.DataFrame(j.get("list", []))
+        df["market"] = mrkt
+        frames.append(df)
+    df = pd.concat(frames, ignore_index=True).rename(columns={"code": "inds_cd", "name": "inds_nm"})
+    c = df["inds_cd"].astype(int)
+    df["is_sector"] = ~df["inds_cd"].isin(NON_SECTOR) & ((c <= 30) | c.between(103, 137) | (c == 141))
+    return df.loc[:, ["market", "inds_cd", "inds_nm", "is_sector"]]
+
+
+def sector_members(api: KiwoomREST, market_tp: str, inds_cd: str) -> list[str]:
+    """ka20002 업종별 주가 → 그 업종에 속한 종목코드 목록 (조회 시점 기준)."""
+    codes: list[str] = []
+    body = {"mrkt_tp": market_tp, "inds_cd": inds_cd, "stex_tp": "1"}
+    for page in api.paged("/api/dostk/sect", "ka20002", body, "inds_stkpc"):
+        codes += [r["stk_cd"] for r in page]
+    return codes
+
+
+def index_daily(api: KiwoomREST, inds_cd: str, base_dt: str, start_dt: str) -> pd.DataFrame:
+    """ka20006 업종(지수) 일봉. 키움은 지수 값을 100배 정수로 주므로 100으로 나눈다."""
+    rows: list[dict] = []
+    body = {"inds_cd": inds_cd, "base_dt": base_dt}
+    for page in api.paged("/api/dostk/chart", "ka20006", body, "inds_dt_pole_qry",
+                          stop=lambda r: r[-1]["dt"] < start_dt):
+        rows += page
+    df = pd.DataFrame([normalize_row(r) for r in rows])
+    if df.empty:
+        return df
+    df = df[df["dt"] >= start_dt].rename(columns={
+        "cur_prc": "close", "open_pric": "open", "high_pric": "high", "low_pric": "low",
+        "trde_qty": "volume", "trde_prica": "value_mil"})
+    for c in ("close", "open", "high", "low"):
+        df[c] = df[c] / 100
+    df.insert(0, "inds_cd", inds_cd)
+    df["received_at"] = now_iso()
+    return df.loc[:, ["inds_cd", "dt", "open", "high", "low", "close", "volume", "value_mil", "received_at"]]
+
+
 def today() -> str:
     return datetime.now().strftime("%Y%m%d")
