@@ -48,6 +48,19 @@ def common_symbols() -> set[str]:
     return set(u.loc[u["is_common"], "code"])
 
 
+def prev_day_top(n: int, common: set[str]) -> list[str]:
+    """일봉 파일의 마지막 거래일 거래대금 상위 n (보통주)."""
+    frames = []
+    for p in path("daily").glob("*.parquet"):
+        d = pd.read_parquet(p, columns=["symbol", "dt", "value_mil"])
+        frames.append(d.tail(1))
+    d = pd.concat(frames, ignore_index=True)
+    d = d[d["dt"] == d["dt"].max()]
+    if common:
+        d = d[d["symbol"].isin(common)]
+    return d.sort_values("value_mil", ascending=False)["symbol"].head(n).tolist()
+
+
 class Daemon:
     def __init__(self):
         self.api = KiwoomREST("real", min_interval=0.3)
@@ -58,6 +71,9 @@ class Daemon:
 
     # ------------------------------------------------------------ watchlist
     def ranked_symbols(self, n: int) -> list[str]:
+        """현재 거래대금 상위. 장 시작 전(09:05 이전)에는 당일 순위가 의미 없으므로 전 거래일 일봉 상위를 쓴다."""
+        if datetime.now().time() < dtime(9, 5):
+            return prev_day_top(n, self.common)
         df = market.trade_value_rank(self.api, pages=2)
         syms = [s for s in df["symbol"] if not self.common or s in self.common]
         return syms[:n]
@@ -112,7 +128,7 @@ class Daemon:
         log.info("틱(%s) %d종목 저장", tag, len(symbols))
 
     def job_morning(self) -> None:
-        self.job_ticks(self.watchlist()[:30], "083000", "am")
+        self.job_ticks(self.ranked_symbols(30), "083000", "am")   # 관심종목은 정렬돼 있으므로 순위로 다시 고른다
 
     def job_eod(self) -> None:
         day = datetime.now().strftime("%Y%m%d")
@@ -147,7 +163,7 @@ class Daemon:
         if backfill_running():
             log.warning("백필이 이미 진행 중이라 증분 백필을 건너뜁니다")
             return
-        for step in ("universe", "daily", "candidates", "minute"):
+        for step in ("universe", "sectors", "daily", "candidates", "minute", "investor"):
             log.info("증분 백필 %s", step)
             subprocess.run([sys.executable, "-m", "scripts.backfill", step], check=False)
         self.common = common_symbols()

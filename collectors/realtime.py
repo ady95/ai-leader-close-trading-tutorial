@@ -55,7 +55,10 @@ class RealtimeCollector:
             self.writers = {}
             self.day = day
         if kind not in self.writers:
-            self.writers[kind] = JsonlGzWriter(path("realtime", day, f"{kind}.jsonl.gz"))
+            p = path("realtime", day, f"{kind}.jsonl.gz")
+            if p.exists():   # 재시작: 이전 프로세스가 끝맺지 못한 gzip 뒤에 이어 쓰면 읽을 수 없게 되므로 새 파일
+                p = path("realtime", day, f"{kind}_{datetime.now():%H%M%S}.jsonl.gz")
+            self.writers[kind] = JsonlGzWriter(p)
         return self.writers[kind]
 
     def _disk_ok(self) -> bool:

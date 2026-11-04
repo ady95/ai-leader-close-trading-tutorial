@@ -84,8 +84,8 @@ def cmd_train() -> None:
     from stable_baselines3.common.env_util import make_vec_env
     d = dict(np.load(NPZ, allow_pickle=False))
     tr, te = subset(d, d["dt"] < SPLIT), subset(d, d["dt"] >= SPLIT)
-    print(f"학습 {len(tr['entry']):,}건 ({tr['dt'].min()}~{tr['dt'].max()}), 평가 {len(te['entry']):,}건 "
-          f"({te['dt'].min()}~{te['dt'].max()})")
+    print(f"학습 {len(tr['entry']):,}건 ({min(tr['dt'])}~{max(tr['dt'])}), 평가 {len(te['entry']):,}건 "
+          f"({min(te['dt'])}~{max(te['dt'])})")
     results = {"S1 시가 전량": fixed_policy(te, 0), "09:01 전량": fixed_policy(te, 1),
                "09:10 전량 (S5)": fixed_policy(te, 10), "09:30 전량 (S5)": fixed_policy(te, N_STEPS)}
     for lam in (0.0, 1.0):
