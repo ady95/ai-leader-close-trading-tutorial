@@ -31,6 +31,9 @@ from risk.limits import RiskLimits
 log = logging.getLogger("trade")
 BUDGET_PER_NAME = 500_000
 TOP_K = 5
+# 주문 관리자는 주문마다 잔고 조회 + 주문 (+ reconcile) 을 부른다. 0.25초 간격이면 모의투자에서
+# HTTP 429 가 났다 (2026-11-04 15:18, 11-05 09:00). 주문 계좌 쪽 호출은 간격을 넓힌다 (16-5).
+ORDER_API_INTERVAL = 0.6
 
 
 def wait_until(hhmmss: str) -> None:
@@ -68,7 +71,7 @@ def submit_with_retry(om: OrderManager, it: Intent, ref: float, deadline: str) -
 
 def cmd_buy() -> None:
     real, mode = KiwoomREST("real"), trading_mode()
-    om = OrderManager(KiwoomREST(mode), journal_path(datetime.now().strftime("%Y%m%d")), RiskLimits())
+    om = OrderManager(KiwoomREST(mode, min_interval=ORDER_API_INTERVAL), journal_path(datetime.now().strftime("%Y%m%d")), RiskLimits())
     common = universe_common()
     real.token(), om.api.token()                      # 토큰은 미리 확인 (16-3)
     wait_until("151800")
@@ -103,7 +106,7 @@ def cmd_sell() -> None:
     if jp is None:
         log.info("매도할 저널 없음")
         return
-    om = OrderManager(KiwoomREST(mode), journal_path(datetime.now().strftime("%Y%m%d")), RiskLimits())
+    om = OrderManager(KiwoomREST(mode, min_interval=ORDER_API_INTERVAL), journal_path(datetime.now().strftime("%Y%m%d")), RiskLimits())
     om.api.token()
     bought = {i.symbol for i in OrderManager(om.api, jp).journal.latest().values()
               if i.side == "buy" and i.status == "accepted"}
@@ -120,7 +123,7 @@ def cmd_sell() -> None:
 
 def cmd_report() -> None:
     mode = trading_mode()
-    om = OrderManager(KiwoomREST(mode), journal_path(datetime.now().strftime("%Y%m%d")))
+    om = OrderManager(KiwoomREST(mode, min_interval=ORDER_API_INTERVAL), journal_path(datetime.now().strftime("%Y%m%d")))
     for f in om.fills():
         log.info("체결 %s", json.dumps({k: f.get(k) for k in ("ord_no", "stk_cd", "io_tp_nm", "cntr_qty", "cntr_pric",
                                                           "ord_tm", "tdy_trde_cmsn", "tdy_trde_tax")},
